@@ -1,1 +1,1 @@
-# gconfig_client
+# config_client
