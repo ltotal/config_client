@@ -1,0 +1,15 @@
+{
+    "name": "ltotal/config_client",
+    "autoload": {
+        "psr-4": {
+            "Ltotal\\ConfigClient\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "ltotal",
+            "email": "7916189@qq.com"
+        }
+    ],
+    "require": {}
+}
