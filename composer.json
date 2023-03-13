@@ -11,5 +11,8 @@
             "email": "7916189@qq.com"
         }
     ],
-    "require": {}
+    "require": {
+        "php": ">=7.3",
+        "ext-json": "*"
+    }
 }
