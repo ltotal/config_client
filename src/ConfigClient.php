@@ -13,61 +13,37 @@ class ConfigClient
         $this->initApp($appConf);
     }
 
-    /**
-     * @param array $appConf
-     * @return void
-     */
     protected function initApp(array $appConf)
     {
-        $apps = $this->getConfByKey($appConf, 'apps', []);
-        $this->cacheFilePath = isset($appConf['cache_file_path']) && !empty($appConf['cache_file_path'])? $appConf['cache_file_path'] : './apollo';
+        $appId = $this->getConfByKey($appConf, 'app_id', '');
+        $cluster = $this->getConfByKey($appConf, 'cluster', 'default');
         $this->cacheFilePath = $this->getConfByKey($appConf, 'cache_file_path', './apollo');
-
-        if(!empty($apps)) {
-            $allKeysConfMap = [];
-            foreach ($apps as $conf) {
-                $appId = $this->getConfByKey($conf, 'app_id');
-                //$appSecret = $this->getConfByKey($conf, 'app_secret');
-                $namespaces = $this->getConfByKey($conf, 'app_namespaces', []);
-                if(!empty($appId) && !empty($namespaces)) {
-                    foreach ($namespaces as $namespace) {
-                        $allKeysConfMap[$appId . '.' . $namespace] = [
-                            'app_id' => $appId,
-                            'namespace' => $namespace,
-                            'cache_key' => $this->getConfigCacheKey($appId, $namespace),
-                        ];
-                    }
+        $nameSpaces = $this->getRedisCli()->get($cluster . '.' . $appId . '.namespaces');
+        $nameSpaces = json_decode($nameSpaces, true);
+        $localLastUpdateTs = $this->getLocalLastUpdateTs();
+        $updateNess = empty($localLastUpdateTs);
+        if(!empty($nameSpaces)) {
+            $cacheKeys = [];
+            $localLastUpdateTs *= 1;
+            foreach ($nameSpaces as $nameSpace => $ts) {
+                if(!$updateNess && ($ts * 1 >= $localLastUpdateTs)) {
+                    $updateNess = true;
                 }
+                $cacheKeys[] = $this->getConfigCacheKey($appId, $nameSpace);
             }
-            try {
+            if($updateNess && !empty($cacheKeys)) {
                 $final = [];
-                $curTs = time();
-                $localLastUpdateTs = $this->getLocalLastUpdateTs();
-                $updateNess = empty($localLastUpdateTs);
-                $cacheKeys = array_column($allKeysConfMap, 'cache_key');
                 $allCacheData = $this->getRedisCli()->mGet($cacheKeys);
-                if(!empty($allCacheData)) {
-                    $idx = 0;
-                    foreach ($allKeysConfMap as $k => $v) {
-                        $tmp = json_decode($allCacheData[$idx], true);
-                        if(empty($tmp)) {
-                            $final = [];
-                            break;
-                        }
-                        $final[$k] = $tmp['data'];
-                        if(!$updateNess && $tmp['last_update_ts'] * 1 >= $localLastUpdateTs * 1) {
-                            $updateNess = true;
-                        }
-                        $idx += 1;
-                    }
+                foreach ($cacheKeys as $k => $v) {
+                    $tmp = json_decode($allCacheData[$k], true);
+                    $final[$v] = $tmp['data'];
                 }
-                if($updateNess && !empty($final)) {
-                    $this->writeJsonConfigCache(
-                        json_encode($final, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)
-                    );
-                    $this->writeLocalLastUpdateTs($curTs);
-                }
-            } catch (\RedisException $e) {}
+                $this->writeJsonConfigCache(
+                    json_encode($final, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)
+                );
+                $this->writeLocalLastUpdateTs(time());
+                print_r('Writing...');
+            }
         }
     }
 
@@ -119,7 +95,7 @@ class ConfigClient
      */
     protected function getConfigCacheKey($appId, $namespace): string
     {
-        return 'apollo_config_' . $appId . '_' . $namespace;
+        return 'apollo_config.' . $appId . '.' . $namespace;
     }
 
     /**
@@ -129,7 +105,6 @@ class ConfigClient
     protected function writeJsonConfigCache(string $data): bool
     {
         $filePath = $this->cacheFilePath . '/configs.json';
-        print_r($filePath);
         $status = file_put_contents($filePath, $data);
         return !($status === false);
     }
@@ -146,15 +121,15 @@ class ConfigClient
     }
 
     /**
-     * @return string
+     * @return int
      */
-    protected function getLocalLastUpdateTs(): string
+    protected function getLocalLastUpdateTs(): int
     {
         $filePath = $this->cacheFilePath . '/last_update_ts';
         if(file_exists($filePath)) {
-            return trim(file_get_contents($filePath));
+            return trim(file_get_contents($filePath)) * 1;
         }
-        return '';
+        return 0;
     }
 
     /**
