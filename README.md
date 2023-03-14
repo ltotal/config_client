@@ -8,6 +8,10 @@ composer require ltotal/config_client
 ## 使用
 
 ```php
+require_once './vendor/autoload.php';
+
+use Ltotal\ConfigClient\ConfigClient;
+
 $appConf = [
     'app_id' => 'sales-mkt', // 配置中心设置的应用id
     'app_secret' => '', // 配置中心的应用密钥
