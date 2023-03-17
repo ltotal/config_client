@@ -13,6 +13,7 @@
     ],
     "require": {
         "php": ">=7.3",
-        "ext-json": "*"
+        "ext-json": "*",
+        "hprose/hprose": "2.0"
     }
 }

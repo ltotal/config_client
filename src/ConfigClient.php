@@ -1,176 +1,128 @@
 <?php
 namespace Ltotal\ConfigClient;
 
-use Redis;
-use RedisException;
+use Hprose\Socket\Client;
+use Exception;
 
 class ConfigClient
 {
-    private static $_client;
+    protected static $checkUpdateInterval = 30;
 
-    protected $redisCli;
+    protected static $lockMaxExpired = 30;
 
-    protected $appId = '';
+    protected static $rpcServer;
 
-    protected $appSecret = '';
+    protected static $rpcTimeout = 100;
 
-    protected $cluster = '';
+    protected static $appId = '';
 
-    protected $cacheFilePath = '';
+    protected static $appSecret = '';
 
-    protected function __construct()
-    {}
+    protected static $cluster = '';
 
-    /**
-     * @return ConfigClient
-     */
-    public static function getInstance(): ConfigClient
-    {
-        if (empty(self::$_client)) {
-            self::$_client = new ConfigClient();
-        }
-        return self::$_client;
-    }
+    protected static $cacheFilePath = '';
 
     /**
      * 初始化
      * @param array $appConf
-     * @param array $redisConf
      * @return void
      */
-    public function init(array $appConf, array $redisConf)
+    public static function init(array $appConf)
     {
-        $this->initRedis($redisConf);
-        $this->initApp($appConf);
+        self::$rpcServer = self::getArrayValueByKey($appConf, 'rpc_server');
+        self::$appId = self::getArrayValueByKey($appConf, 'app_id');
+        self::$appSecret = self::getArrayValueByKey($appConf, 'app_secret');
+        self::$cluster = self::getArrayValueByKey($appConf, 'cluster', 'default');
+        self::$cacheFilePath = self::getArrayValueByKey($appConf, 'cache_file_path', './apollo');
     }
 
-    /**
-     * 根据键名获取(全部/特定)配置
-     * @param string $key
-     * @return array
-     */
-    public function get(string $key = ''): array
+    public static function get(string $key = '')
     {
-        $data = [];
-        $localLastUpdateTs = $this->getLocalLastUpdateTs();
-        $curTs = time();
-        if(!$localLastUpdateTs || ($curTs - $localLastUpdateTs >= 60)) {
-            $nameSpaces = $this->getRedisCli()->get($this->cluster . '.' . $this->appId . '.namespaces');
-            $nameSpaces = json_decode($nameSpaces, true);
-            if (!empty($nameSpaces)) {
-                $cacheKeys = [];
-                $updateNess = empty($localLastUpdateTs);
-                foreach ($nameSpaces as $nameSpace => $ts) {
-                    if (!$updateNess && ($ts * 1 >= $localLastUpdateTs)) {
-                        $updateNess = true;
-                    }
-                    $cacheKeys[] = $this->getConfigCacheKey($this->appId, $nameSpace);
-                }
-                if (!empty($cacheKeys)) {
-                    $allCacheData = $this->getRedisCli()->mGet($cacheKeys);
-                    if (!empty($allCacheData)) {
-                        foreach ($cacheKeys as $k => $v) {
-                            $tmp = json_decode($allCacheData[$k], true);
-                            $data[$v] = $tmp['data'];
-                        }
-                        $this->checkAndWriteCache($data, $updateNess, $curTs);
-                    }
-                }
-            }
-        }else {
-            $data = json_decode($this->getJsonConfigCache(), true);
-            if($data === false) $data = [];
-        }
-        if(empty($key)) {
-            return $data;
-        }
-        $key = $this->getConfigCacheKey($this->appId, $key);
-        return $data[$key]?? [];
+        self::checkAndWriteCache();
+        $data = json_decode(self::getJsonConfigCache(), true);
+        if(empty($data)) $data = [];
+        return empty($key)? $data : $data[$key]?? [];
     }
 
     /**
      * 检查并写入本地配置缓存及本地配置最后更新时间
-     * @param array $writeData
-     * @param bool $updateNess
-     * @param int $curTs
-     * @return void
+     * @return bool
      */
-    protected function checkAndWriteCache(array $writeData, bool $updateNess, int $curTs)
+    protected static function checkAndWriteCache(): bool
     {
-        if($updateNess) {
-            $this->writeJsonConfigCache(
-                json_encode($writeData, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-            );
-            $this->writeLocalLastUpdateTs($curTs);
+        $curTs = time();
+        $haveWrite = false;
+        $localLastUpdateTs = self::getLocalLastUpdateTs();
+
+        if(!$localLastUpdateTs || ($curTs - $localLastUpdateTs >= self::$checkUpdateInterval)) {
+            if(!self::checkWriteLockExist()) {
+                self::addWriteLock();
+                try {
+                    $client = Client::create(self::$rpcServer, false);
+                    $client->setTimeout(self::$rpcTimeout);
+                    $res = $client->GetNameSpaceConfigData(
+                        self::$cluster,
+                        self::$appId,
+                        self::$appSecret,
+                        '',
+                        '',
+                        $localLastUpdateTs
+                    );
+                    $writeDataStatus = false;
+                    $resData = json_decode($res, true);
+                    $code = self::getArrayValueByKey($resData, 'code', 0);
+                    if ($code == 200) {
+                        $writeData = self::getArrayValueByKey($resData, 'data', []);
+                        if (!empty($writeData)) {
+                            $writeDataStatus = self::writeJsonConfigCache(
+                                json_encode($writeData, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+                            );
+                        }
+                    }
+                    //不管本次有无更新本地缓存配置，统一更新本地最后检查时间
+                    $writeLastUpdateTsStatus = self::writeLocalLastUpdateTs($curTs);
+                    $haveWrite = $writeDataStatus && $writeLastUpdateTsStatus;
+                } catch (Exception $e) {
+                    echo $e->getMessage();
+                }
+                self::removeWriteLock();
+            }
         }
+        return $haveWrite;
+    }
+
+    protected static function checkWriteLockExist(): bool
+    {
+        $filePath = self::getWriteLockPath();
+        $writeLock = trim(file_get_contents($filePath)) * 1;
+        return $writeLock > 0 && (time() - $writeLock <= self::$lockMaxExpired);
     }
 
     /**
-     * 初始化app
-     * @param array $appConf
-     * @return void
+     * 添加本地写文件锁
+     * @return bool
      */
-    protected function initApp(array $appConf)
+    protected static function addWriteLock(): bool
     {
-        $this->appId = $this->getConfByKey($appConf, 'app_id');
-        $this->appSecret = $this->getConfByKey($appConf, 'app_secret');
-        $this->cluster = $this->getConfByKey($appConf, 'cluster', 'default');
-        $this->cacheFilePath = $this->getConfByKey($appConf, 'cache_file_path', './apollo');
+        $filePath = self::getWriteLockPath();
+        $status = file_put_contents($filePath, time());
+        return !($status === false);
     }
 
     /**
-     * 初始化redis
-     * @param array $redisConf
-     * @return void
+     * 移除本地写文件锁
+     * @return bool
      */
-    protected function initRedis(array $redisConf = [])
+    protected static function removeWriteLock(): bool
     {
-        $redisCli = $this->getConfByKey($redisConf, 'redis_client', null);
-        if($redisCli !== null) {
-            $this->setRedisCli($redisCli);
-        } else if(!empty($redisConf)) {
-            try {
-                $redisCli = new Redis();
-                list($host, $port, $auth) = [
-                    $this->getConfByKey($redisConf, 'host', '127.0.0.1'),
-                    $this->getConfByKey($redisConf, 'port', 6379),
-                    $this->getConfByKey($redisConf, 'auth')
-                ];
-                $redisCli->connect($host, $port, 0.5);
-                $redisCli->auth($auth);
-                $this->setRedisCli($redisCli);
-            } catch (RedisException $e) {}
-        }
+        $filePath = self::getWriteLockPath();
+        $status = file_put_contents($filePath, 0);
+        return !($status === false);
     }
 
-    /**
-     * 设置redis实例
-     * @param $redisCli
-     * @return void
-     */
-    protected function setRedisCli($redisCli)
+    protected static function getWriteLockPath(): string
     {
-        $this->redisCli = $redisCli;
-    }
-
-    /**
-     * 获取redis实例
-     * @return mixed
-     */
-    protected function getRedisCli()
-    {
-        return $this->redisCli;
-    }
-
-    /**
-     * 获取本地缓存配置对应的redis键名
-     * @param $appId
-     * @param $namespace
-     * @return string
-     */
-    protected function getConfigCacheKey($appId, $namespace): string
-    {
-        return 'apollo_config.' . $appId . '.' . $namespace;
+        return self::$cacheFilePath . '/lock';
     }
 
     /**
@@ -178,9 +130,9 @@ class ConfigClient
      * @param string $data
      * @return bool
      */
-    protected function writeJsonConfigCache(string $data): bool
+    protected static function writeJsonConfigCache(string $data): bool
     {
-        $filePath = $this->getJsonConfigCachePath();
+        $filePath = self::getJsonConfigCachePath();
         $status = file_put_contents($filePath, $data);
         return !($status === false);
     }
@@ -189,9 +141,9 @@ class ConfigClient
      * 获取本地缓存配置
      * @return string
      */
-    protected function getJsonConfigCache(): string
+    protected static function getJsonConfigCache(): string
     {
-        $filePath = $this->getJsonConfigCachePath();
+        $filePath = self::getJsonConfigCachePath();
         if($filePath) {
             return trim(file_get_contents($filePath));
         }
@@ -202,9 +154,9 @@ class ConfigClient
      * 获取本地缓存配置本地存储路径
      * @return string
      */
-    protected function getJsonConfigCachePath(): string
+    protected static function getJsonConfigCachePath(): string
     {
-        return $this->cacheFilePath . '/configs.json';
+        return self::$cacheFilePath . '/configs.json';
     }
 
     /**
@@ -212,9 +164,9 @@ class ConfigClient
      * @param string $data
      * @return string
      */
-    protected function writeLocalLastUpdateTs(string $data): string
+    protected static function writeLocalLastUpdateTs(string $data): string
     {
-        $filePath = $this->getLocalLastUpdateTsPath();
+        $filePath = self::getLocalLastUpdateTsPath();
         $status = file_put_contents($filePath, $data);
         return !($status === false);
     }
@@ -223,9 +175,9 @@ class ConfigClient
      * 获取最后配置更新时间
      * @return int
      */
-    protected function getLocalLastUpdateTs(): int
+    protected static function getLocalLastUpdateTs(): int
     {
-        $filePath = $this->getLocalLastUpdateTsPath();
+        $filePath = self::getLocalLastUpdateTsPath();
         if(file_exists($filePath)) {
             return trim(file_get_contents($filePath)) * 1;
         }
@@ -234,11 +186,11 @@ class ConfigClient
 
     /**
      * 获取最后配置更新时间的本地存储路径
-     * @return int
+     * @return string
      */
-    protected function getLocalLastUpdateTsPath(): string
+    protected static function getLocalLastUpdateTsPath(): string
     {
-        return $this->cacheFilePath . '/last_update_ts';
+        return self::$cacheFilePath . '/last_update_ts';
     }
 
     /**
@@ -248,7 +200,7 @@ class ConfigClient
      * @param mixed $default
      * @return mixed|string
      */
-    protected function getConfByKey(array $data, string $key, $default = '')
+    protected static function getArrayValueByKey(array $data, string $key, $default = '')
     {
         return isset($data[$key]) && !empty($data[$key])? $data[$key] : $default;
     }
