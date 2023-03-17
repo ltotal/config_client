@@ -82,9 +82,7 @@ class ConfigClient
                     //不管本次有无更新本地缓存配置，统一更新本地最后检查时间
                     $writeLastUpdateTsStatus = self::writeLocalLastUpdateTs($curTs);
                     $haveWrite = $writeDataStatus && $writeLastUpdateTsStatus;
-                } catch (Exception $e) {
-                    echo $e->getMessage();
-                }
+                } catch (Exception $e) {}
                 self::removeWriteLock();
             }
         }
