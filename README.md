@@ -13,19 +13,13 @@ require_once './vendor/autoload.php';
 use Ltotal\ConfigClient\ConfigClient;
 
 $appConf = [
+    'rpc_server' => 'tcp://127.0.0.1:1234', // 配置中心客户端服务
     'app_id' => 'sales-mkt', // 配置中心设置的应用id
     'app_secret' => '', // 配置中心的应用密钥
     'cluster' => 'default', // 配置中心使用的集群
-    'cache_file_path' => './apollo' // 本地配置缓存路径
+    'cache_file_path' => './apollo', // 本地配置缓存路径
 ];
 
-$redisConf = [
-    'host' => '127.0.0.1',
-    'port' => 6379,
-    'auth' => '',
-    'redis_client' => ''
-];
-
-ConfigClient::getInstance()->init($appConf, $redisConf);
-$data = ConfigClient::getInstance()->get('SALES.rz_hfdb_core');
+ConfigClient::init($appConf);
+$data = ConfigClient::get('SALES.rz_hfdb_core');
 ```
