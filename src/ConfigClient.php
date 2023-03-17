@@ -12,7 +12,7 @@ class ConfigClient
 
     protected static $rpcServer;
 
-    protected static $rpcTimeout = 100;
+    protected static $rpcTimeout = 1500;
 
     protected static $appId = '';
 
