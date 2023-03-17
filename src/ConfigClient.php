@@ -94,6 +94,7 @@ class ConfigClient
     protected static function checkWriteLockExist(): bool
     {
         $filePath = self::getWriteLockPath();
+        if(!file_exists($filePath)) return false;
         $writeLock = trim(file_get_contents($filePath)) * 1;
         return $writeLock > 0 && (time() - $writeLock <= self::$lockMaxExpired);
     }
