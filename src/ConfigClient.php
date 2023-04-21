@@ -36,19 +36,21 @@ class ConfigClient
         self::$cacheFilePath = self::getArrayValueByKey($appConf, 'cache_file_path', './apollo');
     }
 
-    public static function get(string $key = '')
+    public static function get($key = '')
     {
         self::checkAndWriteCache();
         $data = json_decode(self::getJsonConfigCache(), true);
-        if(empty($data)) $data = [];
-        return empty($key)? $data : $data[$key]?? [];
+        if(empty($data) || !isset($data[$key])) {
+            return [];
+        }
+        return empty($key)? $data : $data[$key];
     }
 
     /**
      * 检查并写入本地配置缓存及本地配置最后更新时间
      * @return bool
      */
-    protected static function checkAndWriteCache(): bool
+    protected static function checkAndWriteCache()
     {
         $curTs = time();
         $haveWrite = false;
@@ -89,7 +91,7 @@ class ConfigClient
         return $haveWrite;
     }
 
-    protected static function checkWriteLockExist(): bool
+    protected static function checkWriteLockExist()
     {
         $filePath = self::getWriteLockPath();
         if(!file_exists($filePath)) return false;
@@ -101,7 +103,7 @@ class ConfigClient
      * 添加本地写文件锁
      * @return bool
      */
-    protected static function addWriteLock(): bool
+    protected static function addWriteLock()
     {
         $filePath = self::getWriteLockPath();
         $status = file_put_contents($filePath, time());
@@ -112,14 +114,14 @@ class ConfigClient
      * 移除本地写文件锁
      * @return bool
      */
-    protected static function removeWriteLock(): bool
+    protected static function removeWriteLock()
     {
         $filePath = self::getWriteLockPath();
         $status = file_put_contents($filePath, 0);
         return !($status === false);
     }
 
-    protected static function getWriteLockPath(): string
+    protected static function getWriteLockPath()
     {
         return self::$cacheFilePath . '/lock';
     }
@@ -129,7 +131,7 @@ class ConfigClient
      * @param string $data
      * @return bool
      */
-    protected static function writeJsonConfigCache(string $data): bool
+    protected static function writeJsonConfigCache($data)
     {
         $filePath = self::getJsonConfigCachePath();
         $status = file_put_contents($filePath, $data);
@@ -140,7 +142,7 @@ class ConfigClient
      * 获取本地缓存配置
      * @return string
      */
-    protected static function getJsonConfigCache(): string
+    protected static function getJsonConfigCache()
     {
         $filePath = self::getJsonConfigCachePath();
         if($filePath) {
@@ -153,7 +155,7 @@ class ConfigClient
      * 获取本地缓存配置本地存储路径
      * @return string
      */
-    protected static function getJsonConfigCachePath(): string
+    protected static function getJsonConfigCachePath()
     {
         return self::$cacheFilePath . '/configs.json';
     }
@@ -161,9 +163,9 @@ class ConfigClient
     /**
      * 写入最后配置更新时间
      * @param string $data
-     * @return string
+     * @return bool
      */
-    protected static function writeLocalLastUpdateTs(string $data): string
+    protected static function writeLocalLastUpdateTs($data)
     {
         $filePath = self::getLocalLastUpdateTsPath();
         $status = file_put_contents($filePath, $data);
@@ -174,7 +176,7 @@ class ConfigClient
      * 获取最后配置更新时间
      * @return int
      */
-    protected static function getLocalLastUpdateTs(): int
+    protected static function getLocalLastUpdateTs()
     {
         $filePath = self::getLocalLastUpdateTsPath();
         if(file_exists($filePath)) {
@@ -187,7 +189,7 @@ class ConfigClient
      * 获取最后配置更新时间的本地存储路径
      * @return string
      */
-    protected static function getLocalLastUpdateTsPath(): string
+    protected static function getLocalLastUpdateTsPath()
     {
         return self::$cacheFilePath . '/last_update_ts';
     }
@@ -199,8 +201,8 @@ class ConfigClient
      * @param mixed $default
      * @return mixed|string
      */
-    protected static function getArrayValueByKey(array $data, string $key, $default = '')
+    protected static function getArrayValueByKey(array $data, $key, $default = '')
     {
-        return isset($data[$key]) && !empty($data[$key])? $data[$key] : $default;
+        return !empty($data[$key]) ? $data[$key] : $default;
     }
 }
